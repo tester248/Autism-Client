@@ -1,0 +1,103 @@
+# Release automation lives ONLY on the ops/release-automation branch so that
+# `main` stays byte-identical to upstream. Run it manually:
+#   gh workflow run build-release.yml --ref ops/release-automation \
+#     --repo tester248/Autism-Client
+# (Push/PR triggers are intentionally absent: GitHub only runs those from the
+# default branch, which would force this file onto `main`.)
+name: Build + Release jar
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to build (branch, tag or SHA on this fork)'
+        default: 'main'
+        required: true
+        type: string
+      make_release:
+        description: 'Create a GitHub Release with the built jar'
+        default: false
+        required: false
+        type: boolean
+      release_tag:
+        description: 'Release tag (required when make_release is true)'
+        default: ''
+        required: false
+        type: string
+      prerelease:
+        description: 'Mark the release as a pre-release'
+        default: true
+        required: false
+        type: boolean
+      release_build:
+        description: 'Build with -Prelease (drops the -dev jar suffix)'
+        default: false
+        required: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out ref to build
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up JDK 25 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle caching
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build jar
+        run: |
+          EXTRA_ARGS=""
+          if [ "${{ inputs.release_build }}" = "true" ]; then EXTRA_ARGS="-Prelease"; fi
+          chmod +x gradlew
+          ./gradlew build --console=plain $EXTRA_ARGS
+          ls -la build/libs/
+
+      - name: Upload jar artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: autism-jar
+          path: build/libs/*.jar
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: ${{ inputs.make_release }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate release_tag input
+        run: |
+          if [ -z "${{ inputs.release_tag }}" ]; then
+            echo "::error::release_tag is required when make_release is true"
+            exit 1
+          fi
+
+      - name: Download jar artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: autism-jar
+          path: dist
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [ "${{ inputs.prerelease }}" = "true" ]; then PRERELEASE_FLAG="--prerelease"; fi
+          gh release create "${{ inputs.release_tag }}" dist/*.jar \
+            --title "${{ inputs.release_tag }}" \
+            $PRERELEASE_FLAG \
+            --notes "Automated build of \`${{ inputs.ref }}\` from the ops/release-automation workflow."
