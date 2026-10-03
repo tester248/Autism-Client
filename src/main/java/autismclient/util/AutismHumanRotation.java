@@ -37,6 +37,13 @@ public final class AutismHumanRotation {
     public enum MotionProfile {
         STANDARD(PEAK_MIN, PEAK_SPAN, EASE_MIN, EASE_SPAN, ACCEL_MIN, ACCEL_SPAN),
 
+        /**
+         * Combat-stealth pursuit: gentler peak turn fraction and a much softer
+         * acceleration ramp, so the emitted aim trails and settles instead of
+         * snapping. Pairs with {@code AutismStealthAim} goal filtering.
+         */
+        STEALTH(0.55D, 0.25D, 0.45D, 0.30D, 4.0D, 5.0D),
+
         TELLY_FLICK(0.97D, 0.03D, 0.97D, 0.03D, 60.0D, 8.0D),
 
         TELLY_AIR_FLICK(0.95D, 0.05D, 0.985D, 0.015D, 68.0D, 8.0D),

@@ -4,12 +4,15 @@ package autismclient.modules;
 
 import autismclient.api.module.BoolSetting;
 import autismclient.api.module.ChoiceSetting;
+import autismclient.api.module.DoubleSetting;
 import autismclient.api.module.IntSetting;
 import autismclient.api.module.RegistryListSetting;
 import autismclient.mixin.accessor.AutismLivingEntityAccessor;
 import autismclient.mixin.accessor.AutismMinecraftAccessor;
 import autismclient.mixin.accessor.AutismMultiPlayerGameModeAccessor;
 import autismclient.util.AutismHandArbiter;
+import autismclient.util.AutismHumanRotation;
+import autismclient.util.AutismStealthAim;
 import autismclient.util.AutismInventoryHelper;
 import autismclient.util.AutismKillAuraRenderer;
 import autismclient.util.AutismKillAuraRotation;
@@ -137,6 +140,9 @@ public final class KillAuraModule extends Module implements AutismSilentAim.Owne
     private final MissState missState = new MissState();
     private final AccuracyGovernor accuracyGovernor = new AccuracyGovernor();
 
+    private final Random stealthRandom = new Random();
+    private final AutismStealthAim.State stealthState = new AutismStealthAim.State();
+
     private LivingEntity currentTarget;
 
     private double closestSquaredEnemyDistance;
@@ -196,6 +202,30 @@ public final class KillAuraModule extends Module implements AutismSilentAim.Owne
             .build());
         add(new BoolSetting("hit-marker", "Render", true).build());
         add(new BoolSetting("hitsound", "Hitsound", true).build());
+        add(new BoolSetting("stealth-aim", "Stealth Aim", true)
+            .description("Humanized aim: wander, still ticks, pursuit lag, reversal overshoot")
+            .group("Stealth")
+            .build());
+        add(new DoubleSetting("stealth-wander", "Wander", 0.4D, 0.0D, 1.0D, 0.05D)
+            .description("Resting-hand drift in degrees")
+            .group("Stealth")
+            .visibleWhen(() -> bool("stealth-aim"))
+            .build());
+        add(new BoolSetting("stealth-pauses", "Still Ticks", true)
+            .description("Occasional zero-delta ticks while settled")
+            .group("Stealth")
+            .visibleWhen(() -> bool("stealth-aim"))
+            .build());
+        add(new BoolSetting("stealth-lag", "Pursuit Lag", true)
+            .description("Trail fast strafers instead of mirroring them")
+            .group("Stealth")
+            .visibleWhen(() -> bool("stealth-aim"))
+            .build());
+        add(new BoolSetting("stealth-overshoot", "Reversal Overshoot", true)
+            .description("Briefly overshoot on strafe reversals")
+            .group("Stealth")
+            .visibleWhen(() -> bool("stealth-aim"))
+            .build());
     }
 
     @Override
@@ -335,11 +365,15 @@ public final class KillAuraModule extends Module implements AutismSilentAim.Owne
 
         boolean inAttackWindow = postAttackWindow || attackImminentThisTick();
         boolean throttle = inAttackWindow && accuracyGovernor.speedAtRisk();
+        AutismHumanRotation.MotionProfile profile = bool("stealth-aim")
+            ? AutismHumanRotation.MotionProfile.STEALTH
+            : AutismHumanRotation.MotionProfile.STANDARD;
         AutismKillAuraRotation.update(AutismKillAuraRotation.OWNER_KILL_AURA, MC.player,
             !inAttackWindow ? AutismKillAuraRotation.TURN_SPEED
                 : throttle ? THROTTLED_MAX_YAW_STEP : WINDOW_MAX_YAW_STEP,
             !inAttackWindow ? AutismKillAuraRotation.TURN_SPEED
-                : throttle ? THROTTLED_MAX_PITCH_STEP : WINDOW_MAX_PITCH_STEP);
+                : throttle ? THROTTLED_MAX_PITCH_STEP : WINDOW_MAX_PITCH_STEP,
+            profile);
 
         if (canRun()) {
             attackPhase();
@@ -538,13 +572,33 @@ public final class KillAuraModule extends Module implements AutismSilentAim.Owne
         if (chosenRotation != null) {
 
             chosenRotation = applyMissOverride(chosen, chosenRotation);
+            chosenRotation = applyStealthFilter(chosenRotation);
 
             AutismKillAuraRotation.setTarget(chosenRotation);
         } else {
             aimPointTracker.clear();
             missState.clear();
+            stealthState.reset();
         }
         currentTarget = chosen;
+    }
+
+    private AutismStealthAim.Config stealthConfig() {
+        AutismStealthAim.Config config = new AutismStealthAim.Config();
+        config.enabled = bool("stealth-aim");
+        config.wanderMaxDeg = decimal("stealth-wander");
+        config.pauses = bool("stealth-pauses");
+        config.lag = bool("stealth-lag");
+        config.overshoot = bool("stealth-overshoot");
+        return config;
+    }
+
+    private AutismRotationUtil.Rotation applyStealthFilter(AutismRotationUtil.Rotation rotation) {
+        if (!bool("stealth-aim")) return rotation;
+        AutismRotationUtil.Rotation current = AutismKillAuraRotation.getCurrentRotation();
+        if (current == null && MC.player != null) current = AutismRotationUtil.playerRotation(MC.player);
+        if (current == null) return rotation;
+        return AutismStealthAim.filter(stealthState, stealthConfig(), stealthRandom, rotation, current);
     }
 
     private List<LivingEntity> collectTargets() {
@@ -1650,6 +1704,7 @@ public final class KillAuraModule extends Module implements AutismSilentAim.Owne
         pendingHitEntityId = -1;
         aimPointTracker.clear();
         missState.clear();
+        stealthState.reset();
         AutismKillAuraRenderer.clear();
     }
 
